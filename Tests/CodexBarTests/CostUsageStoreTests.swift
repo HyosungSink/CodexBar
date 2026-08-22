@@ -12,6 +12,63 @@ import CSQLite3
 // swiftlint:disable file_length
 
 struct CostUsageStoreTests {
+    @Test
+    func `warm store access reuses one full snapshot across incremental refreshes`() async throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+
+        let first = CostUsageStoreAccess.load(cacheRoot: fixture.root, calendar: calendar)
+        let second = CostUsageStoreAccess.load(cacheRoot: fixture.root, calendar: calendar)
+        #expect(first.store === second.store)
+        #expect(await first.store.fullSnapshotReadCountForTesting == 1)
+
+        let path = "/rollouts/incremental.jsonl"
+        var usage = CostUsageFileUsage(
+            mtimeUnixMs: 1_000,
+            size: 100,
+            days: ["2026-08-01": ["gpt-5.6-sol": [10, 2, 1]]])
+        usage.parsedBytes = 100
+        usage.codexScanFileId = "1:42"
+        usage.codexScanComplete = true
+        var refreshed = second.cache
+        refreshed.scanSinceKey = "2026-08-01"
+        refreshed.scanUntilKey = "2026-08-01"
+        refreshed.timeZoneIdentifier = calendar.timeZone.identifier
+        refreshed.files[path] = usage
+        refreshed.days = usage.days
+        refreshed.lastScanUnixMs = 1_000
+        let result = CostUsageStoreAccess.save(
+            store: second.store,
+            cache: refreshed,
+            calendar: calendar,
+            requestedScanWindow: (sinceKey: "2026-08-01", untilKey: "2026-08-01"),
+            skipIdenticalContent: true)
+        #expect(!result.catchUpRequired)
+
+        let third = CostUsageStoreAccess.load(cacheRoot: fixture.root, calendar: calendar)
+        #expect(third.cache.lastScanUnixMs == 1_000)
+        #expect(third.cache.files[path]?.parsedBytes == 100)
+        #expect(await first.store.fetchFile(path: path)?.parsedBytes == 100)
+        #expect(await first.store.fullSnapshotReadCountForTesting == 1)
+
+        var appended = third.cache
+        appended.files[path]?.mtimeUnixMs = 2_000
+        appended.files[path]?.size = 150
+        appended.files[path]?.parsedBytes = 150
+        appended.lastScanUnixMs = 2_000
+        let appendedResult = CostUsageStoreAccess.save(
+            store: third.store,
+            cache: appended,
+            calendar: calendar,
+            requestedScanWindow: (sinceKey: "2026-08-01", untilKey: "2026-08-01"),
+            skipIdenticalContent: true)
+        #expect(!appendedResult.catchUpRequired)
+        #expect(await first.store.fetchFile(path: path)?.parsedBytes == 150)
+        #expect(await first.store.fullSnapshotReadCountForTesting == 1)
+    }
+
     /// The store actor runs on a custom DispatchQueue-backed `SerialExecutor`, and its
     /// `sync*` bridges hand work to the actor from inside `queue.sync`. Getting that handoff
     /// wrong takes the app down on launch with "Incorrect actor executor assumption", so the
@@ -1005,6 +1062,7 @@ extension CostUsageStoreTests {
         let fixture = try StoreFixture()
         defer { fixture.remove() }
         #expect(CostUsageStore.compatiblePredecessorParserHashes == [
+            "fba28fe4dbfc4964",
             "98da5914d2f6a9cd",
             "43609cc56f76a003",
             "b975eb705f905b9a",
@@ -1055,6 +1113,34 @@ extension CostUsageStoreTests {
         let connection = try SQLiteTestConnection(url: fixture.databaseURL, readOnly: true)
         #expect(try connection.scalarInt(
             "SELECT COUNT(*) FROM meta WHERE key = 'parser_hash' AND value = '\(CodexParserHash.value)'") == 1)
+    }
+
+    @Test
+    func `checkpoint column is added in place without rebuilding the ledger`() async throws {
+        let fixture = try StoreFixture()
+        defer { fixture.remove() }
+        var seed: CostUsageStore? = CostUsageStore(cacheRoot: fixture.root)
+        let file = Self.file(path: "/rollouts/checkpoint-migration.jsonl", day: "2026-08-01")
+        let accumulator = Self.accumulator(path: file.path)
+        #expect(await seed?.upsertFile(file) == true)
+        #expect(await seed?.upsertAccumulator(accumulator) == true)
+        seed = nil
+
+        do {
+            let legacy = try SQLiteTestConnection(url: fixture.databaseURL)
+            try legacy.execute("ALTER TABLE accumulators DROP COLUMN token_checkpoints")
+            #expect(try legacy.scalarInt(
+                "SELECT COUNT(*) FROM pragma_table_info('accumulators') WHERE name = 'token_checkpoints'") == 0)
+        }
+
+        let migrated = CostUsageStore(cacheRoot: fixture.root)
+        let restored = try #require(await migrated.fetchAccumulator(path: file.path))
+        #expect(restored.tokenCheckpointsPayload == nil)
+        #expect(restored.eventCount == accumulator.eventCount)
+        #expect(await migrated.rebuildCount == 0)
+        let verified = try SQLiteTestConnection(url: fixture.databaseURL, readOnly: true)
+        #expect(try verified.scalarInt(
+            "SELECT COUNT(*) FROM pragma_table_info('accumulators') WHERE name = 'token_checkpoints'") == 1)
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -2096,6 +2182,7 @@ extension CostUsageStoreTests {
             sawDivergentTotals: true,
             sawInterleavedTotals: true,
             seenRawTotals: [CostUsageStoreTotals(input: 9, cached: 1, output: 2, reasoning: nil)],
+            tokenCheckpointsPayload: Data("[]".utf8),
             updatedAtUnixMs: 99)
     }
 

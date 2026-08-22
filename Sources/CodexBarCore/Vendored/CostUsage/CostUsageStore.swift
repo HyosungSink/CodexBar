@@ -77,6 +77,7 @@ actor CostUsageStore {
         parserHash: CodexParserHash.value)
     static let cacheGeneration = "sqlite:\(CostUsageStore.schemaVersion)"
     static let compatiblePredecessorParserHashes: Set<String> = [
+        "fba28fe4dbfc4964", // Incremental checkpoint persistence and tracker lookup are accounting-neutral.
         "98da5914d2f6a9cd", // Pushed PR producer before retry signaling; persisted rows unchanged.
         "43609cc56f76a003", // 0.49.3 request-tier pricing; persisted row shape unchanged.
         "b975eb705f905b9a", // 0.49.0-0.49.2 SQLite producer with compatible rows.
@@ -107,11 +108,17 @@ actor CostUsageStore {
     private let expectedParserHash: String
     private var connection: SQLiteConnection?
     private(set) var rebuildCount = 0
+    var fullSnapshotReadCountForTesting = 0
     /// While a save cycle's enclosing transaction is open, nested `withDatabase` calls join
     /// it instead of opening their own connection scope, and the first failure aborts the
     /// remainder of the cycle so the outer transaction rolls back as a unit.
     private var activeTransactionDatabase: OpaquePointer?
     private var activeTransactionError: Error?
+    var inMemoryCodexCache: CostUsageCache?
+    var inMemoryCodexCacheTimeZoneIdentifier: String?
+    var inMemoryCodexCacheDataVersion: Int64?
+    var inMemoryCodexSnapshot: CostUsageStoreSnapshot?
+    var inMemoryCodexCacheRequiresCheckpointPersistence = false
 
     init(
         cacheRoot: URL? = nil,
@@ -177,6 +184,12 @@ extension CostUsageStore {
                 rowBudget: rowBudget,
                 fileBudgetBytes: fileBudgetBytes,
                 skipIdenticalContent: skipIdenticalContent)
+        }
+    }
+
+    func currentDataVersion() -> Int64 {
+        self.withDatabase(default: -1) { database in
+            try Self.scalarInt(database, "PRAGMA data_version")
         }
     }
 }
@@ -339,6 +352,7 @@ extension CostUsageStore {
                 try Self.execute(opened, "VACUUM")
                 try self.createSchema(opened)
             }
+            try Self.ensureIncrementalCheckpointColumn(opened)
             return opened
         } catch {
             sqlite3_close_v2(opened)
@@ -429,6 +443,16 @@ extension CostUsageStore {
         defer { sqlite3_finalize(statement) }
         Self.bind(self.expectedParserHash, to: statement, at: 1)
         try Self.stepDone(statement, database: database)
+    }
+
+    /// Storage-only additive migration. Checkpoints are derived state, so older databases stay
+    /// valid and gain the column in place without discarding the already-indexed token ledger.
+    private static func ensureIncrementalCheckpointColumn(_ database: OpaquePointer) throws {
+        let count = try Self.scalarInt(
+            database,
+            "SELECT COUNT(*) FROM pragma_table_info('accumulators') WHERE name = 'token_checkpoints'")
+        guard count == 0 else { return }
+        try Self.execute(database, "ALTER TABLE accumulators ADD COLUMN token_checkpoints BLOB")
     }
 
     private func rebuildDatabase(reason: String) {
@@ -624,6 +648,7 @@ extension CostUsageStore {
         saw_divergent INTEGER NOT NULL,
         saw_interleaved INTEGER NOT NULL,
         seen_raw_totals BLOB NOT NULL,
+        token_checkpoints BLOB,
         updated_at_ms INTEGER NOT NULL
     );
     CREATE INDEX accumulators_updated_idx ON accumulators(updated_at_ms);

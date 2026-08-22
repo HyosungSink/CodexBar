@@ -427,14 +427,15 @@ extension CostUsageStore {
     func upsertAccumulator(_ accumulator: CostUsageStoreAccumulator) -> Bool {
         self.withDatabase(default: false) { database in
             let seen = try JSONEncoder().encode(accumulator.seenRawTotals)
+            let checkpoints = accumulator.tokenCheckpointsPayload
             let statement = try Self.prepare(database, """
             INSERT INTO accumulators (
                 file_id, event_count, next_usage_row_index,
                 counted_input, counted_cached, counted_output, counted_reasoning,
                 baseline_input, baseline_cached, baseline_output, baseline_reasoning,
                 watermark_input, watermark_cached, watermark_output, watermark_reasoning,
-                saw_divergent, saw_interleaved, seen_raw_totals, updated_at_ms
-            ) VALUES ((SELECT id FROM files WHERE path = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                saw_divergent, saw_interleaved, seen_raw_totals, token_checkpoints, updated_at_ms
+            ) VALUES ((SELECT id FROM files WHERE path = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(file_id) DO UPDATE SET
                 event_count = excluded.event_count,
                 next_usage_row_index = excluded.next_usage_row_index,
@@ -453,6 +454,7 @@ extension CostUsageStore {
                 saw_divergent = excluded.saw_divergent,
                 saw_interleaved = excluded.saw_interleaved,
                 seen_raw_totals = excluded.seen_raw_totals,
+                token_checkpoints = excluded.token_checkpoints,
                 updated_at_ms = excluded.updated_at_ms
             """)
             defer { sqlite3_finalize(statement) }
@@ -465,7 +467,8 @@ extension CostUsageStore {
             sqlite3_bind_int(statement, 16, accumulator.sawDivergentTotals ? 1 : 0)
             sqlite3_bind_int(statement, 17, accumulator.sawInterleavedTotals ? 1 : 0)
             Self.bind(seen, to: statement, at: 18)
-            sqlite3_bind_int64(statement, 19, accumulator.updatedAtUnixMs)
+            Self.bind(checkpoints, to: statement, at: 19)
+            sqlite3_bind_int64(statement, 20, accumulator.updatedAtUnixMs)
             try Self.stepDone(statement, database: database)
             return true
         }

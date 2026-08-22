@@ -168,6 +168,7 @@ struct CostUsageStoreAccumulator: Codable, Equatable, Sendable {
     var sawDivergentTotals: Bool
     var sawInterleavedTotals: Bool
     var seenRawTotals: [CostUsageStoreTotals]
+    var tokenCheckpointsPayload: Data? = nil
     var updatedAtUnixMs: Int64
 }
 

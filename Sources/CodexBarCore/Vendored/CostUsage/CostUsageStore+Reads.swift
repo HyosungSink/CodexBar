@@ -98,7 +98,8 @@ extension CostUsageStore {
     }
 
     func readSnapshot() -> CostUsageStoreSnapshot {
-        self.withDatabase(default: Self.emptySnapshot) { database in
+        self.fullSnapshotReadCountForTesting += 1
+        return self.withDatabase(default: Self.emptySnapshot) { database in
             try Self.inReadTransaction(database) {
                 try Self.readSnapshot(database)
             }
@@ -108,7 +109,8 @@ extension CostUsageStore {
     /// Reads from the caller's current transaction. The save path uses this after acquiring
     /// its writer lock so content identity and the following write share one SQLite snapshot.
     func readSnapshotInCurrentTransaction() -> CostUsageStoreSnapshot {
-        self.withDatabase(default: Self.emptySnapshot) { database in
+        self.fullSnapshotReadCountForTesting += 1
+        return self.withDatabase(default: Self.emptySnapshot) { database in
             try Self.readSnapshot(database)
         }
     }
@@ -539,7 +541,8 @@ extension CostUsageStore {
                a.counted_input, a.counted_cached, a.counted_output, a.counted_reasoning,
                a.baseline_input, a.baseline_cached, a.baseline_output, a.baseline_reasoning,
                a.watermark_input, a.watermark_cached, a.watermark_output, a.watermark_reasoning,
-               a.saw_divergent, a.saw_interleaved, a.seen_raw_totals, a.updated_at_ms
+               a.saw_divergent, a.saw_interleaved, a.seen_raw_totals,
+               a.token_checkpoints, a.updated_at_ms
         FROM accumulators a JOIN files f ON f.id = a.file_id
         """
         if path != nil {
@@ -569,7 +572,8 @@ extension CostUsageStore {
                 sawDivergentTotals: sqlite3_column_int(statement, 15) == 1,
                 sawInterleavedTotals: sqlite3_column_int(statement, 16) == 1,
                 seenRawTotals: seen,
-                updatedAtUnixMs: sqlite3_column_int64(statement, 18)))
+                tokenCheckpointsPayload: self.columnData(statement, at: 18),
+                updatedAtUnixMs: sqlite3_column_int64(statement, 19)))
             result = sqlite3_step(statement)
         }
         guard result == SQLITE_DONE else { throw StoreError.sqlite(result) }

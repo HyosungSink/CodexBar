@@ -609,7 +609,20 @@ enum CostUsageScanner {
 
         private(set) var watermark: CostUsageCodexTotals?
         private(set) var seenRawTotals: [CostUsageCodexTotals]
+        private var seenRawTotalKeys: Set<CodexTotalsKey>
         private(set) var sawInterleavedTotals: Bool
+
+        private struct CodexTotalsKey: Hashable {
+            var input: Int
+            var cached: Int
+            var output: Int
+
+            init(_ totals: CostUsageCodexTotals) {
+                self.input = totals.input
+                self.cached = totals.cached
+                self.output = totals.output
+            }
+        }
 
         init(
             watermark: CostUsageCodexTotals? = nil,
@@ -618,11 +631,12 @@ enum CostUsageScanner {
         {
             self.watermark = watermark
             self.seenRawTotals = Array(seenRawTotals.suffix(Self.seenRawTotalsLimit))
+            self.seenRawTotalKeys = Set(self.seenRawTotals.map(CodexTotalsKey.init))
             self.sawInterleavedTotals = sawInterleavedTotals
         }
 
         func isSeen(_ totals: CostUsageCodexTotals) -> Bool {
-            self.seenRawTotals.contains { CostUsageScanner.codexTotalsEqual($0, totals) }
+            self.seenRawTotalKeys.contains(CodexTotalsKey(totals))
         }
 
         /// Latches interleaved mode when any component of an observed cumulative snapshot drops
@@ -642,10 +656,16 @@ enum CostUsageScanner {
         /// value for best-effort re-emission suppression. Call after computing the event's delta.
         mutating func commitObserved(_ totals: CostUsageCodexTotals) {
             self.raiseWatermark(to: totals)
-            if !self.seenRawTotals.contains(where: { CostUsageScanner.codexTotalsEqual($0, totals) }) {
+            let key = CodexTotalsKey(totals)
+            if self.seenRawTotalKeys.insert(key).inserted {
                 self.seenRawTotals.append(totals)
                 if self.seenRawTotals.count > Self.seenRawTotalsLimit {
-                    self.seenRawTotals.removeFirst(self.seenRawTotals.count - Self.seenRawTotalsLimit)
+                    let removeCount = self.seenRawTotals.count - Self.seenRawTotalsLimit
+                    let removed = self.seenRawTotals.prefix(removeCount)
+                    for total in removed {
+                        self.seenRawTotalKeys.remove(CodexTotalsKey(total))
+                    }
+                    self.seenRawTotals.removeFirst(removeCount)
                 }
             }
         }
@@ -847,6 +867,32 @@ enum CostUsageScanner {
             }
         }
         return true
+    }
+
+    /// Validates an append without replaying the already-indexed prefix. The cached flag proves
+    /// ordering inside the prefix; only its boundary with the suffix and the suffix itself are new.
+    static func codexTokenTimestampsRemainMonotonic(
+        existing: [CostUsageCodexTokenSnapshot],
+        appended: [CostUsageCodexTokenSnapshot],
+        cachedWasMonotonic: Bool?) -> Bool
+    {
+        guard cachedWasMonotonic != false else { return false }
+        if cachedWasMonotonic == nil, !Self.codexTokenTimestampsAreMonotonic(existing) {
+            return false
+        }
+        guard !appended.isEmpty else { return cachedWasMonotonic ?? true }
+        guard Self.codexTokenTimestampsAreMonotonic(appended) else { return false }
+        guard let previous = existing.last else { return true }
+        return Self.codexTokenTimestampIsOrdered(previous.timestamp, appended[0].timestamp)
+    }
+
+    private static func codexTokenTimestampIsOrdered(_ previous: String, _ current: String) -> Bool {
+        if let previousDate = Self.dateFromTimestamp(previous),
+           let currentDate = Self.dateFromTimestamp(current)
+        {
+            return previousDate <= currentDate
+        }
+        return previous <= current
     }
 
     struct CodexScanResources {
@@ -1836,10 +1882,14 @@ enum CostUsageScanner {
             let indexedBytes = usage.codexTokenIndexAnchor?.indexedBytes ?? usage.parsedBytes ?? usage.size
             let coversCurrentFile = usage.codexScanComplete != false
                 && indexedBytes >= metadata.size
+            // Checkpoints are persisted for known parents. A newly-created child can reference
+            // an ordinary cached session before the next save, so derive them lazily once here.
+            let checkpoints = usage.codexTokenCheckpoints
+                ?? CostUsageScanner.codexTokenCheckpoints(for: cachedSnapshots)
             return SnapshotResolution(
                 dependencyKey: self.dependencyKey(for: sessionId, fileURL: fileURL),
                 indexedEvents: cachedSnapshots,
-                checkpoints: usage.codexTokenCheckpoints ?? [],
+                checkpoints: checkpoints,
                 indexedTimestampsMonotonic: usage.codexTokenTimestampsMonotonic == true,
                 isComplete: coversCurrentFile)
         }

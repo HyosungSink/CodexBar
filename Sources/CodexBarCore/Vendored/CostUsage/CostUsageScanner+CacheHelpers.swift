@@ -1117,7 +1117,10 @@ extension CostUsageScanner {
                     to: migratedCached.codexTokenCheckpoints ?? [],
                     startingEventIndex: migratedCached.codexTokenSnapshots?.count ?? 0,
                     initialState: initialAccumulatorState),
-            codexTokenTimestampsMonotonic: Self.codexTokenTimestampsAreMonotonic(mergedTokenSnapshots),
+            codexTokenTimestampsMonotonic: Self.codexTokenTimestampsRemainMonotonic(
+                existing: migratedCached.codexTokenSnapshots ?? [],
+                appended: isBufferedForkResume && startOffset == input.metadata.size ? [] : delta.tokenSnapshots,
+                cachedWasMonotonic: migratedCached.codexTokenTimestampsMonotonic),
             codexTokenIndexAnchor: Self.codexTokenIndexAnchor(
                 fileURL: input.fileURL,
                 indexedBytes: delta.parsedBytes),
