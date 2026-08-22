@@ -15,13 +15,36 @@ public enum CodexNetworkPrivacyMode {
         if self.isTruthy(environment[self.environmentKey]) {
             return true
         }
-        if let enabled = Bundle.main.object(forInfoDictionaryKey: self.infoPlistKey) as? Bool {
-            return enabled
-        }
-        if let raw = Bundle.main.object(forInfoDictionaryKey: self.infoPlistKey) as? String {
-            return self.isTruthy(raw)
+        for bundle in self.policyBundles() {
+            if let enabled = bundle.object(forInfoDictionaryKey: self.infoPlistKey) as? Bool,
+               enabled
+            {
+                return true
+            }
+            if let raw = bundle.object(forInfoDictionaryKey: self.infoPlistKey) as? String,
+               self.isTruthy(raw)
+            {
+                return true
+            }
         }
         return false
+    }
+
+    private static func policyBundles() -> [Bundle] {
+        var bundles = [Bundle.main]
+        guard var location = Bundle.main.executableURL?.resolvingSymlinksInPath() else {
+            return bundles
+        }
+        for _ in 0..<6 {
+            if location.pathExtension == "app", let appBundle = Bundle(url: location) {
+                if appBundle.bundleURL != Bundle.main.bundleURL {
+                    bundles.append(appBundle)
+                }
+                break
+            }
+            location.deleteLastPathComponent()
+        }
+        return bundles
     }
 
     private static func isTruthy(_ value: String?) -> Bool {
