@@ -4726,6 +4726,148 @@ struct CostUsageScannerBreakdownTests {
     }
 
     @Test
+    func `codex desktop user fork with restarted totals bypasses parent baseline`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let day = try env.makeLocalNoon(year: 2026, month: 8, day: 22)
+        let forkTimestamp = env.isoString(for: day)
+        let model = "openai/gpt-5.4"
+        let firstRequest = (input: 146_471, cached: 6912, output: 613)
+        let secondRequest = (input: 147_236, cached: 145_920, output: 420)
+        let fileURL = try env.writeCodexSessionFile(
+            day: day,
+            filename: "rollout-\(forkTimestamp)-desktop-user-fork.jsonl",
+            contents: env.jsonl([
+                [
+                    "type": "session_meta",
+                    "timestamp": forkTimestamp,
+                    "payload": [
+                        "id": "child-session",
+                        "forked_from_id": "parent-session",
+                        "source": "vscode",
+                        "thread_source": "user",
+                        "timestamp": forkTimestamp,
+                    ],
+                ],
+                self.codexTurnContext(timestamp: forkTimestamp, model: model),
+                self.codexTokenCount(
+                    timestamp: env.isoString(for: day.addingTimeInterval(1)),
+                    model: model,
+                    total: firstRequest,
+                    last: firstRequest),
+                self.codexTokenCount(
+                    timestamp: env.isoString(for: day.addingTimeInterval(2)),
+                    model: model,
+                    total: (
+                        input: firstRequest.input + secondRequest.input,
+                        cached: firstRequest.cached + secondRequest.cached,
+                        output: firstRequest.output + secondRequest.output),
+                    last: secondRequest),
+            ]))
+        let range = CostUsageScanner.CostUsageDayRange(since: day, until: day)
+
+        var resolvedParentBaseline = false
+        let parsed = CostUsageScanner.parseCodexFile(
+            fileURL: fileURL,
+            range: range,
+            inheritedTotalsResolver: { _, _ in
+                resolvedParentBaseline = true
+                return .resolved(.init(input: 43_679_319, cached: 42_888_192, output: 80_639))
+            })
+
+        let dayKey = CostUsageScanner.CostUsageDayRange.dayKey(from: day)
+        let normalized = CostUsagePricing.normalizeCodexModel(model)
+        #expect(parsed.days[dayKey]?[normalized] == [293_707, 152_832, 1033])
+        #expect(parsed.rows.map(\.input) == [firstRequest.input, secondRequest.input])
+        #expect(parsed.rows.map(\.cached) == [firstRequest.cached, secondRequest.cached])
+        #expect(parsed.rows.map(\.output) == [firstRequest.output, secondRequest.output])
+        #expect(!resolvedParentBaseline)
+    }
+
+    @Test
+    func `codex desktop user fork preserves independent counters across partial resumes`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let day = try env.makeLocalNoon(year: 2026, month: 8, day: 22)
+        let forkTimestamp = env.isoString(for: day)
+        let model = "openai/gpt-5.4"
+        let metadata: [String: Any] = [
+            "type": "session_meta",
+            "timestamp": forkTimestamp,
+            "payload": [
+                "id": "partial-child",
+                "forked_from_id": "missing-parent",
+                "source": "vscode",
+                "thread_source": "user",
+                "timestamp": forkTimestamp,
+            ],
+        ]
+        let firstPart = try env.jsonl([
+            metadata,
+            self.codexTurnContext(timestamp: forkTimestamp, model: model),
+            self.codexTokenCount(
+                timestamp: env.isoString(for: day.addingTimeInterval(1)),
+                model: model,
+                total: (input: 100, cached: 20, output: 10),
+                last: (input: 100, cached: 20, output: 10)),
+            ["type": "response_item", "payload": ["text": String(repeating: "x", count: 2048)]],
+        ]) + "\n"
+        let secondPart = try env.jsonl([
+            metadata,
+            self.codexTurnContext(timestamp: env.isoString(for: day.addingTimeInterval(2)), model: model),
+            self.codexTokenCount(
+                timestamp: env.isoString(for: day.addingTimeInterval(3)),
+                model: model,
+                total: (input: 150, cached: 30, output: 15),
+                last: (input: 50, cached: 10, output: 5)),
+        ]) + "\n"
+        let fileURL = try env.writeCodexSessionFile(
+            day: day,
+            filename: "rollout-partial-desktop-user-fork.jsonl",
+            contents: firstPart + secondPart)
+
+        var options = CostUsageScanner.Options(
+            codexSessionsRoot: env.codexSessionsRoot,
+            claudeProjectsRoots: nil,
+            cacheRoot: env.cacheRoot,
+            maxCodexSessionFileBytes: Int64(firstPart.utf8.count),
+            maxCodexScanBytesPerRefresh: Int64(firstPart.utf8.count),
+            maxCodexScanDurationPerRefresh: 60)
+        options.refreshMinIntervalSeconds = 0
+        _ = CostUsageScanner.loadDailyReport(
+            provider: .codex,
+            since: day,
+            until: day,
+            now: day.addingTimeInterval(4),
+            options: options)
+
+        let firstCache = CostUsageStoreAccess.read(cacheRoot: env.cacheRoot)
+        let firstUsage = try #require(firstCache.files[fileURL.path])
+        #expect(firstUsage.codexScanComplete == false)
+        #expect(firstUsage.forkBaselineDependencyKey == CostUsageScanner.codexForkDependencyNotRequiredKey)
+        #expect(firstUsage.codexBufferedUnresolvedForkLines == nil)
+
+        options.maxCodexScanBytesPerRefresh = Int64(secondPart.utf8.count + 1024)
+        let report = CostUsageScanner.loadDailyReport(
+            provider: .codex,
+            since: day,
+            until: day,
+            now: day.addingTimeInterval(5),
+            options: options)
+
+        let finalCache = CostUsageStoreAccess.read(cacheRoot: env.cacheRoot)
+        let finalUsage = try #require(finalCache.files[fileURL.path])
+        #expect(finalUsage.codexScanComplete == true)
+        #expect(finalUsage.codexBufferedUnresolvedForkLines == nil)
+        #expect(finalUsage.forkBaselineDependencyKey == CostUsageScanner.codexForkDependencyNotRequiredKey)
+        #expect(report.data.first?.inputTokens == 150)
+        #expect(report.data.first?.cacheReadTokens == 30)
+        #expect(report.data.first?.outputTokens == 15)
+    }
+
+    @Test
     func `codex subagent provenance matrix preserves explicit source and parser parity`() throws {
         let env = try CostUsageTestEnvironment()
         defer { env.cleanup() }

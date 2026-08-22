@@ -190,6 +190,35 @@ struct CostUsageCatchUpProgressTests {
     }
 
     @Test
+    func `session discovery indexes the leaf metadata before copied ancestors`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+        let day = try env.makeLocalNoon(year: 2026, month: 5, day: 10)
+        let iso = env.isoString(for: day)
+        let leafSessionID = "leaf-session"
+        let ancestorSessionID = "ancestor-session"
+        let fileURL = try env.writeCodexSessionFile(
+            day: day,
+            filename: "rollout-2026-05-10T12-00-00-\(leafSessionID).jsonl",
+            contents: [
+                #"{"type":"session_meta","timestamp":"\#(iso)","payload":{"id":"\#(leafSessionID)","forked_from_id":"\#(ancestorSessionID)"}}"#,
+                #"{"type":"session_meta","timestamp":"\#(iso)","payload":{"id":"\#(ancestorSessionID)"}}"#,
+            ].joined(separator: "\n") + "\n")
+
+        let index = CostUsageScanner.CodexSessionFileIndex(
+            files: [fileURL],
+            roots: [env.codexSessionsRoot])
+
+        guard case let .found(foundURL) = try index.lookup(sessionId: leafSessionID) else {
+            Issue.record("leaf session was not indexed")
+            return
+        }
+        #expect(foundURL.standardizedFileURL == fileURL.standardizedFileURL)
+        #expect(index.persistedState.filePathBySessionId[leafSessionID] == fileURL.standardizedFileURL.path)
+        #expect(index.persistedState.filePathBySessionId[ancestorSessionID] == nil)
+    }
+
+    @Test
     func `progress key includes active lookback cursor and ignores dictionary insertion order`() {
         var initialCache = CostUsageCache()
         initialCache.codexActiveLookbackState = CostUsageCodexActiveLookbackState(

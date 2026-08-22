@@ -978,6 +978,8 @@ extension CostUsageScanner {
             initialSeenRawTotals: cached.seenRawTotals ?? [],
             initialHasDivergentTotals: initialHasDivergentTotals,
             initialHasInterleavedTotals: cached.hasInterleavedTotals ?? false,
+            initialForkCounterIsIndependent: cached.forkBaselineDependencyKey
+                == Self.codexForkDependencyNotRequiredKey,
             initialCodexTurnID: cached.lastCodexTurnID,
             initialCodexUsageRowIndex: Self.nextCodexUsageRowIndex(cached.codexRows),
             initialBufferedSubagentLines: cached.codexBufferedSubagentLines,

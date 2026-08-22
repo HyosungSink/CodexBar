@@ -202,7 +202,8 @@ for ARCH in "${ARCH_LIST[@]}"; do
   stage_build_products "$ARCH"
 done
 
-APP_FINAL="$ROOT/CodexBar.app"
+APP_BUNDLE_NAME="${CODEXBAR_APP_BUNDLE_NAME:-CodexBar}"
+APP_FINAL="$ROOT/${APP_BUNDLE_NAME}.app"
 APP_STAGE="$ROOT/.build/package/CodexBar.app"
 rm -rf "$APP_STAGE"
 APP="$APP_STAGE"
@@ -228,6 +229,8 @@ if [[ "$SIGNING_MODE" == "adhoc" ]]; then
   FEED_URL=""
   AUTO_CHECKS=false
 fi
+BUNDLE_ID="${CODEXBAR_BUNDLE_ID:-$BUNDLE_ID}"
+APP_DISPLAY_NAME="${CODEXBAR_APP_DISPLAY_NAME:-CodexBar}"
 WIDGET_BUNDLE_ID="${BUNDLE_ID}.widget"
 APP_TEAM_ID="${APP_TEAM_ID:-Y5PE65HELJ}"
 APP_GROUP_ID="${APP_TEAM_ID}.com.steipete.codexbar"
@@ -308,8 +311,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>CodexBar</string>
-    <key>CFBundleDisplayName</key><string>CodexBar</string>
+    <key>CFBundleName</key><string>${APP_DISPLAY_NAME}</string>
+    <key>CFBundleDisplayName</key><string>${APP_DISPLAY_NAME}</string>
     <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
     <key>CFBundleExecutable</key><string>CodexBar</string>
     <key>CFBundlePackageType</key><string>APPL</string>
@@ -341,6 +344,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if [[ -n "${CODEXBAR_COST_CACHE_ROOT:-}" ]]; then
+  /usr/libexec/PlistBuddy \
+    -c "Add :CodexBarCostCacheRoot string ${CODEXBAR_COST_CACHE_ROOT}" \
+    "$APP/Contents/Info.plist"
+fi
 
 # Resolve a built binary from the fresh per-arch snapshot or SwiftPM's reported directory.
 resolve_binary_path() {
@@ -509,8 +518,10 @@ strip_release_binary "$APP/Contents/Helpers/CodexBarCLI"
 # Watchdog helper: ensures `claude` probes die when CodexBar crashes/gets killed.
 install_binary "CodexBarClaudeWatchdog" "$APP/Contents/Helpers/CodexBarClaudeWatchdog"
 strip_release_binary "$APP/Contents/Helpers/CodexBarClaudeWatchdog"
-install_widget_extension
-strip_release_binary "$APP/Contents/PlugIns/CodexBarWidget.appex/Contents/MacOS/CodexBarWidget"
+if [[ "${CODEXBAR_SKIP_WIDGET:-0}" != "1" ]]; then
+  install_widget_extension
+  strip_release_binary "$APP/Contents/PlugIns/CodexBarWidget.appex/Contents/MacOS/CodexBarWidget"
+fi
 
 swiftpm_bin_path "${ARCH_LIST[0]}" PREFERRED_BUILD_DIR
 

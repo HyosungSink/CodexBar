@@ -1482,7 +1482,7 @@ enum CostUsageScanner {
             shouldStop: { _ in sessionId != nil },
             checkCancellation: checkCancellation,
             onLine: { line in
-                guard !line.wasTruncated else { return }
+                guard sessionId == nil, !line.wasTruncated else { return }
                 if case let .sessionMeta(metadata) = Self.parseCodexFastLine(line.bytes) {
                     sessionId = metadata.sessionId
                 }
@@ -3168,6 +3168,7 @@ enum CostUsageScanner {
         let forkedFromId: String?
         let forkTimestamp: String?
         let projectPath: String?
+        let threadSource: String?
         let isSubagentThread: Bool
         let subagentHistoryStartOrdinal: Int?
     }
@@ -3236,6 +3237,7 @@ enum CostUsageScanner {
     private static let codexJSONFieldPayload = Array("payload".utf8)
     private static let codexJSONFieldSource = Array("source".utf8)
     private static let codexJSONFieldSubagent = Array("subagent".utf8)
+    private static let codexJSONFieldThreadSource = Array("thread_source".utf8)
     private static let codexJSONFieldSubagentHistoryStartOrdinal =
         Array("subagent_history_start_ordinal".utf8)
     private static let codexJSONFieldSessionId = Array("session_id".utf8)
@@ -3491,6 +3493,13 @@ enum CostUsageScanner {
                         in: objectRange,
                         atDepth: 1),
                     projectPath: Self.codexProjectPath(from: rawBuffer, payloadRange: payloadRange),
+                    threadSource: payloadRange.flatMap {
+                        Self.extractJSONByteStringField(
+                            Self.codexJSONFieldThreadSource,
+                            from: rawBuffer,
+                            in: $0,
+                            atDepth: 1)
+                    },
                     isSubagentThread: payloadRange.map {
                         Self.codexIsSubagentThread(from: rawBuffer, in: $0)
                     } ?? false,
@@ -3712,6 +3721,7 @@ enum CostUsageScanner {
             forkTimestamp: payload?["timestamp"] as? String
                 ?? obj["timestamp"] as? String,
             projectPath: Self.normalizedCodexProjectPath(payload?["cwd"] as? String),
+            threadSource: payload?["thread_source"] as? String,
             isSubagentThread: Self.codexIsSubagentThread(from: payload),
             subagentHistoryStartOrdinal: (payload?["subagent_history_start_ordinal"] as? NSNumber)?.intValue)
     }
@@ -4005,6 +4015,7 @@ enum CostUsageScanner {
         initialSeenRawTotals: [CostUsageCodexTotals] = [],
         initialHasDivergentTotals: Bool = false,
         initialHasInterleavedTotals: Bool = false,
+        initialForkCounterIsIndependent: Bool = false,
         initialCodexTurnID: String? = nil,
         initialCodexUsageRowIndex: Int = 0,
         initialBufferedSubagentLines: [CodexBufferedFastLine]? = nil,
@@ -4020,11 +4031,14 @@ enum CostUsageScanner {
         var sessionId: String?
         var forkedFromId: String?
         var projectPath: String?
+        var threadSource: String?
         var isSubagentThread = false
         var didCaptureLeafMetadata = false
         var forkTimestamp: String?
         var subagentHistoryStartOrdinal: Int?
-        var subagentCounterSemantics: CodexSubagentCounterSemantics?
+        var subagentCounterSemantics: CodexSubagentCounterSemantics? = initialForkCounterIsIndependent
+            ? .independent
+            : nil
         var usesLocalSubagentBoundary = false
         var candidateBoundaryDependsOnParentTotals = false
         var parentConfirmedLocalBoundary = false
@@ -4134,6 +4148,13 @@ enum CostUsageScanner {
                 forkedAt: forkTimestamp ?? "")
         }
 
+        func shouldDeferDesktopUserForkBaseline() -> Bool {
+            forkedFromId != nil
+                && !isSubagentThread
+                && subagentCounterSemantics == nil
+                && threadSource?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+        }
+
         func handleSessionMetadata(_ metadata: CodexSessionMetadata) throws {
             // The first parsed session_meta is the authoritative leaf. Copied prefixes can
             // contain many embedded ancestor metas; they are shape evidence, never new identity.
@@ -4141,11 +4162,16 @@ enum CostUsageScanner {
                 // A same-leaf restart may add metadata that was absent from the initial record.
                 // Enrich missing fork/project fields without allowing an ancestor to replace identity.
                 guard CodexSubagentRolloutShape.sameConcreteSessionID(metadata.sessionId, sessionId) else { return }
+                if threadSource == nil {
+                    threadSource = metadata.threadSource
+                }
                 if forkedFromId == nil, let enrichedParentID = metadata.forkedFromId {
                     forkedFromId = enrichedParentID
                     codexSession.forkedFromId = enrichedParentID
                     forkTimestamp = metadata.forkTimestamp ?? forkTimestamp
-                    try configureForkAccountingIfReady()
+                    if !shouldDeferDesktopUserForkBaseline() {
+                        try configureForkAccountingIfReady()
+                    }
                 }
                 if projectPath == nil {
                     projectPath = metadata.projectPath
@@ -4164,13 +4190,16 @@ enum CostUsageScanner {
             forkedFromId = metadata.forkedFromId
             forkTimestamp = metadata.forkTimestamp
             projectPath = metadata.projectPath
+            threadSource = metadata.threadSource
             subagentHistoryStartOrdinal = metadata.subagentHistoryStartOrdinal
             codexSession.sessionId = metadata.sessionId
             codexSession.forkedFromId = metadata.forkedFromId
             observeTimestamp(metadata.forkTimestamp)
             observeCwd(metadata.projectPath)
             isSubagentThread = metadata.isSubagentThread
-            try configureForkAccountingIfReady()
+            if !shouldDeferDesktopUserForkBaseline() {
+                try configureForkAccountingIfReady()
+            }
         }
 
         // swiftlint:disable:next function_body_length
@@ -4186,6 +4215,27 @@ enum CostUsageScanner {
                 ?? CostUsagePricing.codexUnattributedModel
             let total = record.total
             let last = record.last
+            // Current Codex Desktop user-thread forks declare `thread_source: "user"`
+            // and restart their cumulative counters at zero. Their first non-empty snapshot
+            // therefore has total == last. Treat that pair as direct counter-shape evidence;
+            // subtracting the parent watermark would discard genuine child requests until the
+            // restarted counter happened to overtake the parent (#local-user-fork-counter).
+            if forkedFromId != nil,
+               !isSubagentThread,
+               threadSource?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user",
+               subagentCounterSemantics == nil,
+               let total,
+               let last,
+               Self.codexTotalsEqual(total, last),
+               total.input > 0 || total.cached > 0 || total.output > 0
+            {
+                subagentCounterSemantics = .independent
+                forkBaselineResolved = true
+                inheritedTotals = nil
+                remainingInheritedTotals = nil
+                hasUnresolvedForkBaseline = false
+            }
+            try configureForkAccountingIfReady()
             // A cumulative fork counter is not attributable until either the parent snapshot or
             // a trustworthy child-owned suffix establishes the inherited baseline. Publishing
             // best-effort `last` rows here can replay billions of copied-prefix tokens.
@@ -4517,6 +4567,7 @@ enum CostUsageScanner {
                                             forkedFromId: nil,
                                             forkTimestamp: nil,
                                             projectPath: nil,
+                                            threadSource: nil,
                                             isSubagentThread: false,
                                             subagentHistoryStartOrdinal: nil)),
                                         lineIndex: lineIndex,

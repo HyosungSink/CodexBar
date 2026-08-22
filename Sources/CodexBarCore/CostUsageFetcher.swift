@@ -66,12 +66,24 @@ public struct CostUsageFetcher: Sendable {
 
     private let scannerOptions: CostUsageScanner.Options?
 
+    private static func configuredCacheRoot() -> URL? {
+        let environmentPath = ProcessInfo.processInfo.environment["CODEXBAR_COST_CACHE_ROOT"]
+        let bundlePath = Bundle.main.object(forInfoDictionaryKey: "CodexBarCostCacheRoot") as? String
+        guard let rawPath = environmentPath ?? bundlePath else { return nil }
+        let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return nil }
+        return URL(
+            fileURLWithPath: (path as NSString).expandingTildeInPath,
+            isDirectory: true)
+    }
+
     public init(cacheRoot: URL? = nil, calendar: Calendar? = nil) {
-        if cacheRoot == nil, calendar == nil {
+        let resolvedCacheRoot = cacheRoot ?? Self.configuredCacheRoot()
+        if resolvedCacheRoot == nil, calendar == nil {
             self.scannerOptions = nil
         } else {
             var options = CostUsageScanner.Options()
-            options.cacheRoot = cacheRoot
+            options.cacheRoot = resolvedCacheRoot
             if let calendar {
                 options.calendar = calendar
             }
