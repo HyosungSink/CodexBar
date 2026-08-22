@@ -30,7 +30,8 @@ struct CodexProviderImplementation: ProviderImplementation {
 
     @MainActor
     func defaultSourceLabel(context: ProviderSourceLabelContext) -> String? {
-        context.settings.codexUsageDataSource.rawValue
+        if CodexNetworkPrivacyMode.isCLIOnly { return CodexUsageDataSource.cli.rawValue }
+        return context.settings.codexUsageDataSource.rawValue
     }
 
     @MainActor
@@ -47,7 +48,8 @@ struct CodexProviderImplementation: ProviderImplementation {
 
     @MainActor
     func sourceMode(context: ProviderSourceModeContext) -> ProviderSourceMode {
-        switch context.settings.codexUsageDataSource {
+        if CodexNetworkPrivacyMode.isCLIOnly { return .cli }
+        return switch context.settings.codexUsageDataSource {
         case .auto: .auto
         case .pat: .api
         case .oauth: .oauth
@@ -130,7 +132,7 @@ struct CodexProviderImplementation: ProviderImplementation {
                 binding: extrasBinding,
                 statusText: nil,
                 actions: [],
-                isVisible: nil,
+                isVisible: { !CodexNetworkPrivacyMode.isCLIOnly },
                 onChange: nil,
                 onAppDidBecomeActive: nil,
                 onAppearWhenEnabled: nil),
@@ -145,7 +147,7 @@ struct CodexProviderImplementation: ProviderImplementation {
                 binding: context.boolBinding(\.codexExternalOAuthSourcesAllowed),
                 statusText: nil,
                 actions: [],
-                isVisible: nil,
+                isVisible: { !CodexNetworkPrivacyMode.isCLIOnly },
                 onChange: nil,
                 onAppDidBecomeActive: nil,
                 onAppearWhenEnabled: nil),

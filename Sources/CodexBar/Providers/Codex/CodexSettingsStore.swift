@@ -146,11 +146,13 @@ extension SettingsStore {
 
     var codexUsageDataSource: CodexUsageDataSource {
         get {
+            if CodexNetworkPrivacyMode.isCLIOnly { return .cli }
             let source = self.configSnapshot.providerConfig(for: .codex)?.source
             return Self.codexUsageDataSource(from: source)
         }
         set {
-            let source: ProviderSourceMode? = switch newValue {
+            let resolvedValue = CodexNetworkPrivacyMode.isCLIOnly ? CodexUsageDataSource.cli : newValue
+            let source: ProviderSourceMode? = switch resolvedValue {
             case .auto: .auto
             case .pat: .api
             case .oauth: .oauth
@@ -159,7 +161,7 @@ extension SettingsStore {
             self.updateProviderConfig(provider: .codex) { entry in
                 entry.source = source
             }
-            self.logProviderModeChange(provider: .codex, field: "usageSource", value: newValue.rawValue)
+            self.logProviderModeChange(provider: .codex, field: "usageSource", value: resolvedValue.rawValue)
         }
     }
 

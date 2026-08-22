@@ -214,6 +214,13 @@ Requires macOS 14+ and Swift 6.2+.
 open CodexBar.app
 ```
 
+For a privacy-hardened Codex build that delegates account and quota requests to the official
+`codex app-server` process and disables direct Codex OAuth/PAT/Web access in CodexBar:
+
+```bash
+CODEXBAR_CODEX_CLI_ONLY=1 ./Scripts/package_app.sh
+```
+
 Dev loop:
 ```bash
 ./Scripts/compile_and_run.sh

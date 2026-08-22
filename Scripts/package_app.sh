@@ -351,6 +351,12 @@ if [[ -n "${CODEXBAR_COST_CACHE_ROOT:-}" ]]; then
     "$APP/Contents/Info.plist"
 fi
 
+if [[ "${CODEXBAR_CODEX_CLI_ONLY:-0}" == "1" ]]; then
+  /usr/libexec/PlistBuddy \
+    -c "Add :CodexBarCodexCLIOnly bool true" \
+    "$APP/Contents/Info.plist"
+fi
+
 # Resolve a built binary from the fresh per-arch snapshot or SwiftPM's reported directory.
 resolve_binary_path() {
   local name="$1"

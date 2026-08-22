@@ -118,7 +118,7 @@ public enum CodexProviderDescriptor {
                     creditsVisibility: .requiresValueOrError,
                     supportsInlineTokenCostDashboard: true)),
             fetchPlan: ProviderFetchPlan(
-                sourceModes: [.auto, .web, .cli, .oauth, .api],
+                sourceModes: CodexNetworkPrivacyMode.isCLIOnly ? [.cli] : [.auto, .web, .cli, .oauth, .api],
                 pipeline: ProviderFetchPipeline(resolveStrategies: self.resolveStrategies)),
             cli: ProviderCLIConfig(
                 name: "codex",
@@ -131,8 +131,11 @@ public enum CodexProviderDescriptor {
     }
 
     private static func resolveStrategies(context: ProviderFetchContext) async -> [any ProviderFetchStrategy] {
-        let pat = CodexPATFetchStrategy()
         let cli = CodexCLIUsageStrategy()
+        guard !CodexNetworkPrivacyMode.isCLIOnly(environment: context.env) else {
+            return [cli]
+        }
+        let pat = CodexPATFetchStrategy()
         let oauth = CodexOAuthFetchStrategy()
         let web = CodexWebDashboardStrategy()
         let oauthWithNativeRefresh: [any ProviderFetchStrategy] = [oauth, CodexOAuthNativeRefreshCLIStrategy()]

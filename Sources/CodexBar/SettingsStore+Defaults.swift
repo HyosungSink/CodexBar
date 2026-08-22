@@ -836,22 +836,24 @@ extension SettingsStore {
     }
 
     var codexExternalOAuthSourcesAllowed: Bool {
-        get { self.defaultsState.codexExternalOAuthSourcesAllowed }
+        get { CodexNetworkPrivacyMode.isCLIOnly ? false : self.defaultsState.codexExternalOAuthSourcesAllowed }
         set {
-            self.defaultsState.codexExternalOAuthSourcesAllowed = newValue
-            self.userDefaults.set(newValue, forKey: "codexExternalOAuthSourcesAllowed")
+            let resolvedValue = CodexNetworkPrivacyMode.isCLIOnly ? false : newValue
+            self.defaultsState.codexExternalOAuthSourcesAllowed = resolvedValue
+            self.userDefaults.set(resolvedValue, forKey: "codexExternalOAuthSourcesAllowed")
             self.noteBackgroundWorkSettingsChanged()
         }
     }
 
     var openAIWebAccessEnabled: Bool {
-        get { self.defaultsState.openAIWebAccessEnabled }
+        get { CodexNetworkPrivacyMode.isCLIOnly ? false : self.defaultsState.openAIWebAccessEnabled }
         set {
-            self.defaultsState.openAIWebAccessEnabled = newValue
-            self.userDefaults.set(newValue, forKey: "openAIWebAccessEnabled")
+            let resolvedValue = CodexNetworkPrivacyMode.isCLIOnly ? false : newValue
+            self.defaultsState.openAIWebAccessEnabled = resolvedValue
+            self.userDefaults.set(resolvedValue, forKey: "openAIWebAccessEnabled")
             CodexBarLog.logger(LogCategories.settings).info(
                 "OpenAI web access updated",
-                metadata: ["enabled": newValue ? "1" : "0"])
+                metadata: ["enabled": resolvedValue ? "1" : "0"])
             self.noteBackgroundWorkSettingsChanged()
         }
     }

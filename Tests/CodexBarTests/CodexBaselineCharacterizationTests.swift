@@ -48,6 +48,16 @@ struct CodexBaselineCharacterizationTests {
         return strategies.map(\.id)
     }
 
+    @Test(arguments: ProviderSourceMode.allCases)
+    func `CLI-only privacy mode never resolves a direct network strategy`(sourceMode: ProviderSourceMode) async {
+        let ids = await self.strategyIDs(
+            runtime: .app,
+            sourceMode: sourceMode,
+            env: [CodexNetworkPrivacyMode.environmentKey: "1"])
+
+        #expect(ids == ["codex.cli"])
+    }
+
     private func fetchOutcome(
         runtime: ProviderRuntime,
         sourceMode: ProviderSourceMode,

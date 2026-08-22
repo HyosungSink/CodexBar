@@ -1124,7 +1124,7 @@ public struct UsageFetcher: Sendable {
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.environment = environment
         self.initializeTimeoutSeconds = 8.0
-        self.requestTimeoutSeconds = 3.0
+        self.requestTimeoutSeconds = CodexNetworkPrivacyMode.isCLIOnly(environment: environment) ? 15.0 : 3.0
         self.codexExecutableResolver = defaultCodexExecutableResolver
         self.codexArguments = ["-s", "read-only", "-a", "untrusted", "app-server"]
     }
