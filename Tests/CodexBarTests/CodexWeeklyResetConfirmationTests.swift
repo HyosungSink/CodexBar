@@ -383,6 +383,45 @@ struct CodexWeeklyResetConfirmationTests {
     }
 
     @Test
+    func `available reset credit does not block a confirmed server rewindow far from depletion`() throws {
+        let formatter = ISO8601DateFormatter()
+        let previousCapturedAt = try #require(formatter.date(from: "2026-08-24T00:39:57Z"))
+        let previousReset = try #require(formatter.date(from: "2026-08-28T17:12:53Z"))
+        let initialCapturedAt = try #require(formatter.date(from: "2026-08-24T01:14:59Z"))
+        let initialReset = try #require(formatter.date(from: "2026-08-31T00:44:29Z"))
+        let previousCredits = self.resetCredits(
+            status: .available,
+            capturedAt: previousCapturedAt,
+            expiresAt: previousCapturedAt.addingTimeInterval(30 * 24 * 60 * 60))
+        let previous = self.snapshot(
+            capturedAt: previousCapturedAt,
+            weeklyUsed: 18,
+            weeklyReset: previousReset,
+            resetCredits: previousCredits)
+        let initial = self.snapshot(
+            capturedAt: initialCapturedAt,
+            weeklyUsed: 1,
+            weeklyReset: initialReset,
+            resetCredits: previousCredits)
+        let confirmationCapturedAt = initialCapturedAt.addingTimeInterval(30)
+        let confirmation = self.snapshot(
+            capturedAt: confirmationCapturedAt,
+            weeklyUsed: 1,
+            weeklyReset: initialReset.addingTimeInterval(30),
+            resetCredits: previousCredits)
+
+        #expect(
+            CodexWeeklyResetConfirmation.initialDecision(previous: previous, initial: initial)
+                == .requiresConfirmation)
+        #expect(
+            CodexWeeklyResetConfirmation.confirmationDecision(
+                previous: previous,
+                initial: initial,
+                confirmation: confirmation)
+                == .publishConfirmation)
+    }
+
+    @Test
     func `one missing reset credit inventory does not confirm an early manual weekly reset`() throws {
         let formatter = ISO8601DateFormatter()
         let previousCapturedAt = try #require(formatter.date(from: "2026-08-06T09:28:18Z"))

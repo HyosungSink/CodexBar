@@ -15,6 +15,8 @@ struct CodexWeeklyResetConfirmation: Sendable {
 
     private static let resetEquivalenceToleranceSeconds: TimeInterval = 2 * 60
     private static let resetThreshold = 1.0
+    private static let earlyRewindowMaximumPreviousUsedPercent = 90.0
+    private static let freshWindowMinimumRemainingFraction = 0.9
 
     static func initialDecision(
         previous: UsageSnapshot?,
@@ -143,22 +145,69 @@ struct CodexWeeklyResetConfirmation: Sendable {
                previousWeekly,
                capturedAt: previous.updatedAt)
         {
-            let confirmsManualReset = Self.confirmsManualResetCreditConsumption(
-                previous: previous,
-                initial: initial,
-                confirmation: confirmation)
-            if confirmation.updatedAt < previousBoundary.addingTimeInterval(-2 * 60),
-               !confirmsManualReset
-            {
-                return .preservePrevious
-            }
             guard initialBoundary.timeIntervalSince(previousBoundary) >= Self.resetEquivalenceToleranceSeconds,
                   confirmationBoundary.timeIntervalSince(previousBoundary) >= Self.resetEquivalenceToleranceSeconds
             else {
                 return .preservePrevious
             }
+            let confirmsManualReset = Self.confirmsManualResetCreditConsumption(
+                previous: previous,
+                initial: initial,
+                confirmation: confirmation)
+            let confirmsServerRewindow = Self.confirmsServerSideEarlyRewindow(
+                previous: previous,
+                previousWeekly: previousWeekly,
+                initial: initial,
+                initialWeekly: initialWeekly,
+                confirmation: confirmation,
+                confirmationWeekly: confirmationWeekly)
+            if confirmation.updatedAt < previousBoundary.addingTimeInterval(-2 * 60),
+               !confirmsManualReset,
+               !confirmsServerRewindow
+            {
+                return .preservePrevious
+            }
         }
         return .publishConfirmation
+    }
+
+    /// OpenAI can occasionally replace a still-active weekly window without consuming the user's
+    /// manual reset credit. Two matching low observations are trustworthy when the old window was
+    /// not near depletion and both candidates describe a newly started, materially advanced full
+    /// window. This remains stricter than the manual-reset path so a transient rolling-boundary
+    /// response at exhaustion cannot erase a real high-usage snapshot.
+    private static func confirmsServerSideEarlyRewindow(
+        previous: UsageSnapshot,
+        previousWeekly: RateWindow,
+        initial: UsageSnapshot,
+        initialWeekly: RateWindow,
+        confirmation: UsageSnapshot,
+        confirmationWeekly: RateWindow) -> Bool
+    {
+        guard previousWeekly.usedPercent < Self.earlyRewindowMaximumPreviousUsedPercent,
+              let initialWindowMinutes = initialWeekly.windowMinutes,
+              initialWindowMinutes > 0,
+              confirmationWeekly.windowMinutes == initialWindowMinutes,
+              let previousBoundary = Self.validResetBoundary(previousWeekly, capturedAt: previous.updatedAt),
+              let initialBoundary = Self.validResetBoundary(initialWeekly, capturedAt: initial.updatedAt),
+              let confirmationBoundary = Self.validResetBoundary(
+                  confirmationWeekly,
+                  capturedAt: confirmation.updatedAt),
+              initialBoundary.timeIntervalSince(previousBoundary) >= Self.resetEquivalenceToleranceSeconds,
+              confirmationBoundary.timeIntervalSince(previousBoundary) >= Self.resetEquivalenceToleranceSeconds,
+              abs(initialBoundary.timeIntervalSince(confirmationBoundary))
+              < Self.resetEquivalenceToleranceSeconds
+        else {
+            return false
+        }
+
+        let windowSeconds = TimeInterval(initialWindowMinutes) * 60
+        let minimumRemaining = windowSeconds * Self.freshWindowMinimumRemainingFraction
+        let maximumRemaining = windowSeconds + Self.resetEquivalenceToleranceSeconds
+        let initialRemaining = initialBoundary.timeIntervalSince(initial.updatedAt)
+        let confirmationRemaining = confirmationBoundary.timeIntervalSince(confirmation.updatedAt)
+        return initialRemaining >= minimumRemaining && initialRemaining <= maximumRemaining &&
+            confirmationRemaining >= minimumRemaining && confirmationRemaining <= maximumRemaining
     }
 
     private static func confirmsManualResetCreditConsumption(
