@@ -203,8 +203,11 @@ for ARCH in "${ARCH_LIST[@]}"; do
 done
 
 APP_BUNDLE_NAME="${CODEXBAR_APP_BUNDLE_NAME:-CodexBar}"
-APP_FINAL="$ROOT/${APP_BUNDLE_NAME}.app"
-APP_STAGE="$ROOT/.build/package/CodexBar.app"
+APP_OUTPUT_DIR="${CODEXBAR_APP_OUTPUT_DIR:-$ROOT}"
+APP_STAGE_DIR="${CODEXBAR_APP_STAGE_DIR:-$ROOT/.build/package}"
+mkdir -p "$APP_OUTPUT_DIR" "$APP_STAGE_DIR"
+APP_FINAL="$APP_OUTPUT_DIR/${APP_BUNDLE_NAME}.app"
+APP_STAGE="$APP_STAGE_DIR/CodexBar.app"
 rm -rf "$APP_STAGE"
 APP="$APP_STAGE"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
