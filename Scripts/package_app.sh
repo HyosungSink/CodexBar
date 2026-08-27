@@ -535,6 +535,11 @@ swiftpm_bin_path "${ARCH_LIST[0]}" PREFERRED_BUILD_DIR
 SPARKLE_SOURCE=$(codexbar_require_product_directory "$PREFERRED_BUILD_DIR" Sparkle.framework packaging)
 cp -R "$SPARKLE_SOURCE" "$APP/Contents/Frameworks/"
 chmod -R a+rX "$APP/Contents/Frameworks/Sparkle.framework"
+# External volumes can attach Finder/resource-fork metadata during the copy. Sparkle's
+# nested apps are signed below, before the bundle-wide cleanup near the end, so remove
+# that metadata here as well or codesign rejects Updater.app.
+xattr -cr "$APP/Contents/Frameworks/Sparkle.framework"
+find "$APP/Contents/Frameworks/Sparkle.framework" -name '._*' -delete
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/CodexBar"
 # Re-sign Sparkle and all nested components with the selected package identity.
 SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
