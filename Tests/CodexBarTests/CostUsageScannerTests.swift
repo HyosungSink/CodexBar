@@ -509,6 +509,117 @@ struct CostUsageScannerTests {
     }
 
     @Test
+    func `codex incremental parsing counts an explicit cumulative counter restart`() throws {
+        let env = try CostUsageTestEnvironment()
+        defer { env.cleanup() }
+
+        let day = try env.makeLocalNoon(year: 2026, month: 8, day: 27)
+        let iso0 = env.isoString(for: day)
+        let iso1 = env.isoString(for: day.addingTimeInterval(1))
+        let iso2 = env.isoString(for: day.addingTimeInterval(2))
+        let model = "gpt-5.6-sol"
+        let turnContext: [String: Any] = [
+            "type": "turn_context",
+            "timestamp": iso0,
+            "payload": ["model": model],
+        ]
+        let initialTokenCount: [String: Any] = [
+            "type": "event_msg",
+            "timestamp": iso0,
+            "payload": [
+                "type": "token_count",
+                "info": [
+                    "total_token_usage": [
+                        "input_tokens": 1000,
+                        "cached_input_tokens": 800,
+                        "output_tokens": 100,
+                    ],
+                ],
+            ],
+        ]
+        let fileURL = try env.writeCodexSessionFile(
+            day: day,
+            filename: "counter-restart.jsonl",
+            contents: env.jsonl([turnContext, initialTokenCount]))
+        let range = CostUsageScanner.CostUsageDayRange(since: day, until: day)
+        let initial = CostUsageScanner.parseCodexFile(fileURL: fileURL, range: range)
+
+        let restartedTokenCount: [String: Any] = [
+            "type": "event_msg",
+            "timestamp": iso1,
+            "payload": [
+                "type": "token_count",
+                "info": [
+                    "last_token_usage": [
+                        "input_tokens": 100,
+                        "cached_input_tokens": 60,
+                        "output_tokens": 10,
+                    ],
+                    "total_token_usage": [
+                        "input_tokens": 100,
+                        "cached_input_tokens": 60,
+                        "output_tokens": 10,
+                    ],
+                ],
+            ],
+        ]
+        let nextTokenCount: [String: Any] = [
+            "type": "event_msg",
+            "timestamp": iso2,
+            "payload": [
+                "type": "token_count",
+                "info": [
+                    "last_token_usage": [
+                        "input_tokens": 60,
+                        "cached_input_tokens": 40,
+                        "output_tokens": 6,
+                    ],
+                    "total_token_usage": [
+                        "input_tokens": 160,
+                        "cached_input_tokens": 100,
+                        "output_tokens": 16,
+                    ],
+                ],
+            ],
+        ]
+        try env.jsonl([turnContext, initialTokenCount, restartedTokenCount, nextTokenCount])
+            .write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let delta = try CostUsageScanner.parseCodexFileCancellable(
+            fileURL: fileURL,
+            range: range,
+            startOffset: initial.parsedBytes,
+            initialModel: initial.lastModel,
+            initialTotals: initial.lastCountedTotals,
+            initialRawTotalsBaseline: initial.lastRawTotalsBaseline,
+            initialRawTotalsWatermark: initial.lastRawTotalsWatermark,
+            initialSeenRawTotals: initial.seenRawTotals,
+            initialHasDivergentTotals: initial.hasDivergentTotals,
+            initialHasInterleavedTotals: initial.hasInterleavedTotals)
+
+        #expect(delta.rows.map(\.input) == [100, 60])
+        #expect(delta.rows.map(\.cached) == [60, 40])
+        #expect(delta.rows.map(\.output) == [10, 6])
+        #expect(delta.lastCountedTotals?.input == 1160)
+        #expect(delta.lastCountedTotals?.cached == 900)
+        #expect(delta.lastCountedTotals?.output == 116)
+
+        var accumulator = CostUsageScanner.CodexSnapshotAccumulator()
+        _ = accumulator.apply(
+            last: nil,
+            total: .init(input: 1000, cached: 800, output: 100))
+        _ = accumulator.apply(
+            last: .init(input: 100, cached: 60, output: 10),
+            total: .init(input: 100, cached: 60, output: 10))
+        let accumulated = accumulator.apply(
+            last: .init(input: 60, cached: 40, output: 6),
+            total: .init(input: 160, cached: 100, output: 16))
+        #expect(accumulated.input == 1160)
+        #expect(accumulated.cached == 900)
+        #expect(accumulated.output == 116)
+    }
+
+    @Test
     func `codex incremental parsing keeps current turn id`() throws {
         let env = try CostUsageTestEnvironment()
         defer { env.cleanup() }

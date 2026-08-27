@@ -639,6 +639,24 @@ enum CostUsageScanner {
             self.seenRawTotalKeys.contains(CodexTotalsKey(totals))
         }
 
+        func isStrictlyBelowWatermark(_ totals: CostUsageCodexTotals) -> Bool {
+            guard let watermark = self.watermark else { return false }
+            return totals.input < watermark.input
+                || totals.cached < watermark.cached
+                || totals.output < watermark.output
+        }
+
+        /// Starts a new cumulative-counter segment after Codex explicitly restarts totals at the
+        /// current request (`total_token_usage == last_token_usage`). Keep already-counted usage in
+        /// the caller, but discard lineage containment state from the previous segment so the new
+        /// request is not suppressed below a stale high watermark.
+        mutating func resetObservedCounter() {
+            self.watermark = nil
+            self.seenRawTotals = []
+            self.seenRawTotalKeys = []
+            self.sawInterleavedTotals = false
+        }
+
         /// Latches interleaved mode when any component of an observed cumulative snapshot drops
         /// strictly below the watermark. A monotonic counter cannot decrease, so a drop means either
         /// a second lineage or a reset; both must stop trusting gap-sized totals deltas.
@@ -719,6 +737,14 @@ enum CostUsageScanner {
                 output: 0,
                 reasoning: hasReasoning ? 0 : nil)
             if let total {
+                let isExplicitCounterRestart = last.map {
+                    CostUsageScanner.codexTotalsEqual(total, $0)
+                } == true && self.tracker.isStrictlyBelowWatermark(total)
+                if isExplicitCounterRestart {
+                    self.tracker.resetObservedCounter()
+                    self.rawTotalsBaseline = nil
+                    self.sawDivergentTotals = false
+                }
                 // Best-effort exact re-emission suppression (precision only; containment is load-bearing).
                 if self.tracker.isSeen(total) {
                     return base
@@ -4332,6 +4358,16 @@ enum CostUsageScanner {
             }
 
             if let adjustedTotal {
+                let counterCanRestartIndependently = forkedFromId == nil
+                    || subagentCounterSemantics == .independent
+                let isExplicitCounterRestart = counterCanRestartIndependently
+                    && last.map { Self.codexTotalsEqual(adjustedTotal, $0) } == true
+                    && tracker.isStrictlyBelowWatermark(adjustedTotal)
+                if isExplicitCounterRestart {
+                    tracker.resetObservedCounter()
+                    rawTotalsBaseline = nil
+                    sawDivergentTotals = false
+                }
                 // Only committed observations enter the seen set. Replacing this with a bare
                 // watermark-equality check would skip first-time fork baseline bookkeeping.
                 // Post-latch containment remains the load-bearing overcount guard.
