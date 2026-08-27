@@ -635,6 +635,12 @@ if [[ "$EMBED_PROVISIONING_PROFILE" == "1" ]]; then
   cp "$PROVISIONING_PROFILE_SOURCE" "$APP/Contents/embedded.provisionprofile"
 fi
 
+# Nested signing on some external volumes can reattach Finder metadata to the app
+# directory itself. Clear it once more after all nested components are sealed and
+# immediately before the root signature.
+xattr -cr "$APP"
+find "$APP" -name '._*' -delete
+
 # Finally sign the app bundle itself
 codesign "${CODESIGN_ARGS[@]}" \
   --entitlements "$APP_ENTITLEMENTS" \
