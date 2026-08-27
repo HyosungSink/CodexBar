@@ -409,6 +409,17 @@ public struct CostUsageFetcher: Sendable {
             options.codexSessionsRoot = URL(fileURLWithPath: codexHomePath, isDirectory: true)
                 .appendingPathComponent("sessions", isDirectory: true)
         }
+        if provider == .codex {
+            let scope = CodexLocalDataScope.resolve(options: options)
+            if let remote = RemoteCodexUsageMirror.configuration(
+                codexHome: scope.codexHome,
+                cacheRoot: options.cacheRoot)
+            {
+                options.codexAdditionalSessionsRoots = remote.sessionRoots
+            } else {
+                options.codexAdditionalSessionsRoots = []
+            }
+        }
         return options
     }
 
@@ -563,6 +574,18 @@ public struct CostUsageFetcher: Sendable {
         // These synchronous scans can run for minutes on large archives. The dedicated queue keeps
         // them off the cooperative pool and bridges task cancellation into scanner-level checks.
         return try await CostUsageScanExecutor.run { checkCancellation in
+            if provider == .codex {
+                let scope = CodexLocalDataScope.resolve(options: options.scanOptions)
+                if let remote = RemoteCodexUsageMirror.configuration(
+                    codexHome: scope.codexHome,
+                    cacheRoot: options.scanOptions.cacheRoot)
+                {
+                    RemoteCodexUsageMirror.synchronizeIfNeeded(
+                        configuration: remote,
+                        force: options.scanOptions.forceRescan,
+                        checkCancellation: checkCancellation)
+                }
+            }
             var daily = try CostUsageScanner.loadDailyReportCancellable(
                 provider: provider,
                 since: since,

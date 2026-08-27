@@ -360,6 +360,12 @@ if [[ "${CODEXBAR_CODEX_CLI_ONLY:-0}" == "1" ]]; then
     "$APP/Contents/Info.plist"
 fi
 
+if [[ "${CODEXBAR_REMOTE_CODEX_USAGE:-0}" == "1" ]]; then
+  /usr/libexec/PlistBuddy \
+    -c "Add :CodexBarRemoteCodexUsageEnabled bool true" \
+    "$APP/Contents/Info.plist"
+fi
+
 # Resolve a built binary from the fresh per-arch snapshot or SwiftPM's reported directory.
 resolve_binary_path() {
   local name="$1"

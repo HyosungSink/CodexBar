@@ -154,6 +154,10 @@ enum CostUsageScanner {
 
     struct Options {
         var codexSessionsRoot: URL?
+        /// Additional local mirrors of Codex session roots. The first root remains the
+        /// native Codex home; mirrors are kept separate so remote rollouts never mutate
+        /// the user's local Codex data.
+        var codexAdditionalSessionsRoots: [URL]
         var claudeProjectsRoots: [URL]?
         var cacheRoot: URL?
         var codexTraceDatabaseURL: URL?
@@ -177,6 +181,7 @@ enum CostUsageScanner {
 
         init(
             codexSessionsRoot: URL? = nil,
+            codexAdditionalSessionsRoots: [URL] = [],
             claudeProjectsRoots: [URL]? = nil,
             cacheRoot: URL? = nil,
             codexTraceDatabaseURL: URL? = nil,
@@ -190,6 +195,7 @@ enum CostUsageScanner {
             codexScanWorkRecorderForTesting: CodexScanWorkRecorder? = nil)
         {
             self.codexSessionsRoot = codexSessionsRoot
+            self.codexAdditionalSessionsRoots = codexAdditionalSessionsRoots
             self.claudeProjectsRoots = claudeProjectsRoots
             self.cacheRoot = cacheRoot
             self.codexTraceDatabaseURL = codexTraceDatabaseURL
@@ -903,18 +909,18 @@ enum CostUsageScanner {
         cachedWasMonotonic: Bool?) -> Bool
     {
         guard cachedWasMonotonic != false else { return false }
-        if cachedWasMonotonic == nil, !Self.codexTokenTimestampsAreMonotonic(existing) {
+        if cachedWasMonotonic == nil, !self.codexTokenTimestampsAreMonotonic(existing) {
             return false
         }
         guard !appended.isEmpty else { return cachedWasMonotonic ?? true }
-        guard Self.codexTokenTimestampsAreMonotonic(appended) else { return false }
+        guard self.codexTokenTimestampsAreMonotonic(appended) else { return false }
         guard let previous = existing.last else { return true }
         return Self.codexTokenTimestampIsOrdered(previous.timestamp, appended[0].timestamp)
     }
 
     private static func codexTokenTimestampIsOrdered(_ previous: String, _ current: String) -> Bool {
-        if let previousDate = Self.dateFromTimestamp(previous),
-           let currentDate = Self.dateFromTimestamp(current)
+        if let previousDate = dateFromTimestamp(previous),
+           let currentDate = dateFromTimestamp(current)
         {
             return previousDate <= currentDate
         }
@@ -2066,11 +2072,21 @@ enum CostUsageScanner {
     }
 
     static func codexSessionsRoots(options: Options) -> [URL] {
-        let root = self.defaultCodexSessionsRoot(options: options)
-        if let archived = self.codexArchivedSessionsRoot(sessionsRoot: root) {
-            return [root, archived]
+        let configuredRoots = [self.defaultCodexSessionsRoot(options: options)]
+            + options.codexAdditionalSessionsRoots
+        var seen: Set<String> = []
+        var roots: [URL] = []
+        for root in configuredRoots {
+            let standardized = root.standardizedFileURL
+            guard seen.insert(standardized.path).inserted else { continue }
+            roots.append(standardized)
+            if let archived = self.codexArchivedSessionsRoot(sessionsRoot: standardized),
+               seen.insert(archived.standardizedFileURL.path).inserted
+            {
+                roots.append(archived.standardizedFileURL)
+            }
         }
-        return [root]
+        return roots
     }
 
     private static func codexArchivedSessionsRoot(sessionsRoot: URL) -> URL? {
