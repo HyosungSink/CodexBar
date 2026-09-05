@@ -562,7 +562,18 @@ else
   CODESIGN_ID="${APP_IDENTITY:-Developer ID Application: Peter Steinberger (Y5PE65HELJ)}"
   CODESIGN_ARGS=(--force --timestamp --options runtime --sign "$CODESIGN_ID")
 fi
-function resign() { codesign "${CODESIGN_ARGS[@]}" "$1"; }
+function resign() {
+  local target="$1"
+
+  # External volumes can reattach Finder/resource-fork metadata after the
+  # framework-wide cleanup above. Remove it immediately before each nested
+  # signing operation so codesign never observes those extended attributes.
+  xattr -cr "$target"
+  if [[ -d "$target" ]]; then
+    find "$target" -name '._*' -delete
+  fi
+  codesign "${CODESIGN_ARGS[@]}" "$target"
+}
 # Validate Sparkle's nested layout before signing so framework layout drift fails clearly.
 SPARKLE_SIGNING_TARGETS=$(codexbar_sparkle_signing_targets "$SPARKLE")
 while IFS= read -r SPARKLE_TARGET; do
