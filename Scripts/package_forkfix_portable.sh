@@ -89,9 +89,14 @@ for local_path in "$ROOT" "$BUILD_USER_HOME"; do
   fi
 done
 
+if find "$APP_PATH" -type d -name '*Tests.bundle' -print -quit | grep -q .; then
+  echo "ERROR: Packaged app contains a test resource bundle" >&2
+  exit 1
+fi
+
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 rm -f "$ARCHIVE_PATH" "$CHECKSUM_PATH"
-ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
+ditto -c -k --keepParent "$APP_PATH" "$ARCHIVE_PATH"
 (
   cd "$DIST_DIR"
   shasum -a 256 "$ARCHIVE_NAME" > "$(basename "$CHECKSUM_PATH")"

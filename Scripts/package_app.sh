@@ -616,6 +616,9 @@ shopt -u nullglob
 if [[ ${#SWIFTPM_BUNDLES[@]} -gt 0 ]]; then
   for bundle in "${SWIFTPM_BUNDLES[@]}"; do
     bundle_name="$(basename "$bundle")"
+    if [[ "$bundle_name" == *Tests.bundle ]]; then
+      continue
+    fi
     cp -R "$bundle" "$APP/Contents/Resources/"
   done
 fi
