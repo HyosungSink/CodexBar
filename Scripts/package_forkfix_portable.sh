@@ -9,7 +9,9 @@ source "$ROOT/Scripts/release_artifacts.sh"
 
 ARCHES_VALUE="${ARCHES:-arm64 x86_64}"
 DIST_DIR="${CODEXBAR_FORKFIX_DIST_DIR:-$ROOT/dist}"
-WORK_ROOT="$ROOT/.build/forkfix-portable"
+TEMP_PARENT="${TMPDIR:-/tmp}"
+TEMP_PARENT="${TEMP_PARENT%/}"
+WORK_ROOT=$(mktemp -d "$TEMP_PARENT/codexbar-forkfix-package.XXXXXX")
 APP_OUTPUT_DIR="$WORK_ROOT/output"
 APP_STAGE_DIR="$WORK_ROOT/package"
 APP_NAME="CodexBar ForkFix"
@@ -22,7 +24,18 @@ ARCHIVE_NAME="CodexBar-ForkFix-${ARCH_LABEL}-${PACKAGE_VERSION}.zip"
 ARCHIVE_PATH="$DIST_DIR/$ARCHIVE_NAME"
 CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 
-rm -rf "$APP_OUTPUT_DIR" "$APP_STAGE_DIR"
+cleanup() {
+  case "$WORK_ROOT" in
+    "$TEMP_PARENT"/codexbar-forkfix-package.*)
+      [[ -d "$WORK_ROOT" ]] && rm -rf -- "$WORK_ROOT"
+      ;;
+    *)
+      echo "WARN: Refusing to clean unexpected temporary path: $WORK_ROOT" >&2
+      ;;
+  esac
+}
+trap cleanup EXIT
+
 mkdir -p "$APP_OUTPUT_DIR" "$APP_STAGE_DIR" "$DIST_DIR"
 
 env \
