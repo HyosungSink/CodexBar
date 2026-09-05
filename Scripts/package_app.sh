@@ -82,10 +82,6 @@ patch_keyboard_shortcuts() {
   if [[ ! -f "$util_path" ]]; then
     return 0
   fi
-  if grep -q "keyboardShortcutsSafeBundle" "$util_path"; then
-    return 0
-  fi
-
   chmod +w "$util_path" || true
   python3 - "$util_path" <<'PY'
 import sys
@@ -93,7 +89,30 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text()
+old_dev_fallback = '''        let devURL = URL(fileURLWithPath: #file)
+            .deletingLastPathComponent()  // Utilities.swift
+            .deletingLastPathComponent()  // KeyboardShortcuts
+            .deletingLastPathComponent()  // Sources
+            .appendingPathComponent("KeyboardShortcuts_KeyboardShortcuts.bundle")
+        if let bundle = Bundle(url: devURL) {
+            return bundle
+        }
+
+        return Bundle.main'''
+portable_fallback = '''        #if DEBUG
+        return .module
+        #else
+        // A release package must not retain a compile-time source path.
+        return Bundle.main
+        #endif'''
+
+if old_dev_fallback in text:
+    path.write_text(text.replace(old_dev_fallback, portable_fallback))
+    sys.exit(0)
+
 if ".keyboardShortcutsSafeBundle" in text:
+    if portable_fallback not in text:
+        raise SystemExit("Unknown KeyboardShortcuts safe-bundle patch; refusing to continue.")
     sys.exit(0)
 
 text = text.replace(
@@ -118,16 +137,12 @@ private extension Bundle {
         }
         #endif
 
-        let devURL = URL(fileURLWithPath: #file)
-            .deletingLastPathComponent()  // Utilities.swift
-            .deletingLastPathComponent()  // KeyboardShortcuts
-            .deletingLastPathComponent()  // Sources
-            .appendingPathComponent("KeyboardShortcuts_KeyboardShortcuts.bundle")
-        if let bundle = Bundle(url: devURL) {
-            return bundle
-        }
-
+        #if DEBUG
+        return .module
+        #else
+        // A release package must not retain a compile-time source path.
         return Bundle.main
+        #endif
     }()
 }
 """

@@ -90,16 +90,17 @@ public enum CodexBarCoreResources {
         #endif
     }
 
-    private static let defaultSwiftPMBuildDirectory: URL = {
+    private static let defaultSwiftPMBuildDirectory: URL? = {
+        #if DEBUG
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent() // CodexBarCore
             .deletingLastPathComponent() // Sources
             .deletingLastPathComponent() // package root
-        #if DEBUG
-        let configuration = "debug"
+        return packageRoot.appendingPathComponent(".build/debug", isDirectory: true)
         #else
-        let configuration = "release"
+        // Packaged release binaries resolve only shipped resources. Avoid
+        // embedding the build machine's source path as an unusable fallback.
+        return nil
         #endif
-        return packageRoot.appendingPathComponent(".build/\(configuration)", isDirectory: true)
     }()
 }
