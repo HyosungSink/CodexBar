@@ -2,6 +2,11 @@
 
 > Every AI coding limit, in your menu bar.
 
+> [!NOTE]
+> This HyosungSink fork includes the ForkFix local/remote Codex accounting changes.
+> See [portable ForkFix installation and source-build instructions](docs/forkfix-portable.md)
+> for installing the same build on another Mac without copying account or session data.
+
 [![Latest release](https://img.shields.io/github/v/release/steipete/CodexBar?style=flat-square&color=0a0a0c)](https://github.com/steipete/CodexBar/releases/latest)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-0a0a0c?style=flat-square)](https://github.com/steipete/CodexBar/releases/latest)
 [![Homebrew](https://img.shields.io/badge/brew-steipete%2Ftap%2Fcodexbar-orange?style=flat-square)](https://github.com/steipete/homebrew-tap)
